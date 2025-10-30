@@ -1,0 +1,8 @@
+name: "extra_light"
+description: "Slight cleanup with gentle SOR."
+radius_keep_q: 0.99980
+density_keep_q: 0.08
+composite_keep_q: 0.10
+sor_std: 3.2
+hsv_v_min: null
+hsv_s_max: null

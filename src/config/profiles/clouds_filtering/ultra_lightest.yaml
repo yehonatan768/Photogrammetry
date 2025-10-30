@@ -1,0 +1,8 @@
+name: "ultra_lightest"
+description: "Extremely mild cleanup. Keep almost everything."
+radius_keep_q: 0.99999
+density_keep_q: 0.02
+composite_keep_q: 0.05
+sor_std: null
+hsv_v_min: null
+hsv_s_max: null

@@ -1,0 +1,6 @@
+name: "medium_strong"
+description: "Medium-strong pruning. Removes weaker regions."
+radius_keep_q: 0.990
+density_keep_q: 0.55
+composite_keep_q: 0.50
+sor_std: 2.2

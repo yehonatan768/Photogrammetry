@@ -1,0 +1,8 @@
+name: "medium_light"
+description: "Medium-light filtering. Starts tightening structure."
+radius_keep_q: 0.99800
+density_keep_q: 0.18
+composite_keep_q: 0.20
+sor_std: 2.8
+hsv_v_min: null
+hsv_s_max: null

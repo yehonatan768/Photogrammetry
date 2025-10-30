@@ -1,0 +1,6 @@
+name: "strong"
+description: "Strong pruning. Keeps mostly dense core."
+radius_keep_q: 0.975
+density_keep_q: 0.60
+composite_keep_q: 0.55
+sor_std: 2.0

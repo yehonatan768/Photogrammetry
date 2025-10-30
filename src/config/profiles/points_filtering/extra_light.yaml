@@ -1,0 +1,6 @@
+name: "extra_light"
+description: "Slightly stronger than ultra_light."
+radius_keep_q: 0.9997
+density_keep_q: 0.15
+composite_keep_q: 0.20
+sor_std: null

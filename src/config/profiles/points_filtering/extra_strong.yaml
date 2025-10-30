@@ -1,0 +1,6 @@
+name: "extra_strong"
+description: "Extra strong pruning."
+radius_keep_q: 0.970
+density_keep_q: 0.65
+composite_keep_q: 0.58
+sor_std: 1.9

@@ -1,0 +1,12 @@
+name: balanced
+description: "Balanced\u2013gentle (default-ish)"
+depth: 11
+crop: 0.006
+smooth_iters: 0
+adaptive: true
+adaptive_params:
+  iters: 3
+  low_q: 0.38
+  high_q: 0.9
+  gamma: 0.9
+cloud_cleanup: false

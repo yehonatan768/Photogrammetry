@@ -1,0 +1,18 @@
+# --- Core PyTorch stack (CUDA 12.1 build) ---
+torch==2.2.2+cu121
+torchvision==0.17.2+cu121
+torchaudio==2.2.2+cu121
+# Official PyTorch index for CUDA 12.1 wheels:
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# --- Nerfstudio (latest stable release) ---
+nerfstudio
+
+# --- Common dependencies (utilities, visualization) ---
+numpy
+scipy
+matplotlib
+opencv-python
+imageio
+tqdm
+rich

@@ -1,0 +1,8 @@
+name: "medium"
+description: "Balanced cleanup. Removes floaters and most sky noise."
+radius_keep_q: 0.99700
+density_keep_q: 0.22
+composite_keep_q: 0.25
+sor_std: 2.6
+hsv_v_min: 0.85
+hsv_s_max: 0.25

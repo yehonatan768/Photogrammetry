@@ -1,0 +1,8 @@
+name: "light"
+description: "Light filtering, retains most geometry."
+radius_keep_q: 0.99950
+density_keep_q: 0.10
+composite_keep_q: 0.12
+sor_std: 3.0
+hsv_v_min: null
+hsv_s_max: null

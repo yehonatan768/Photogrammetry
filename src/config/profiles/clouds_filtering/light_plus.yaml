@@ -1,0 +1,8 @@
+name: "light_plus"
+description: "Light+, a bit stronger radius/density trimming."
+radius_keep_q: 0.99900
+density_keep_q: 0.12
+composite_keep_q: 0.15
+sor_std: 2.9
+hsv_v_min: null
+hsv_s_max: null

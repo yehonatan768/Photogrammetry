@@ -1,0 +1,6 @@
+name: "off"
+description: "No prefilter. Use raw exported point cloud."
+radius_keep_q: null
+density_keep_q: null
+composite_keep_q: null
+sor_std: null

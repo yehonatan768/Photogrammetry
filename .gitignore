@@ -1,0 +1,24 @@
+# Python virtual environment
+.venv/
+venv/
+
+# Videos and output folders
+videos/
+outputs/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Common OS files
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+
+# IDE / Editor settings
+.vscode/
+.idea/

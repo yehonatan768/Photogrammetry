@@ -1,0 +1,12 @@
+name: high_detail
+description: High detail but still restrained
+depth: 13
+crop: 0.012
+smooth_iters: 0
+adaptive: true
+adaptive_params:
+  iters: 3
+  low_q: 0.32
+  high_q: 0.92
+  gamma: 0.95
+cloud_cleanup: false

@@ -1,0 +1,12 @@
+name: ultra_preserve
+description: "Maximum preservation \u2014 minimal intervention"
+depth: 12
+crop: 0.0
+smooth_iters: 0
+adaptive: false
+adaptive_params:
+  iters: 0
+  low_q: 0.5
+  high_q: 0.9
+  gamma: 1.0
+cloud_cleanup: false

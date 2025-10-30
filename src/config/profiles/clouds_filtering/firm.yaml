@@ -1,0 +1,8 @@
+name: "firm"
+description: "Firm cleanup. Removes light clutter and weak structures."
+radius_keep_q: 0.99300
+density_keep_q: 0.38
+composite_keep_q: 0.38
+sor_std: 2.2
+hsv_v_min: 0.83
+hsv_s_max: 0.30

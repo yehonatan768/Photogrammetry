@@ -1,0 +1,6 @@
+name: "medium"
+description: "Balanced cleanup (your old 'light')."
+radius_keep_q: 0.995
+density_keep_q: 0.40
+composite_keep_q: 0.45
+sor_std: 2.5

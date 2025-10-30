@@ -1,0 +1,8 @@
+name: "off"
+description: "No filtering. Keep original point cloud."
+radius_keep_q: null
+density_keep_q: null
+composite_keep_q: null
+sor_std: null
+hsv_v_min: null
+hsv_s_max: null

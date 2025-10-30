@@ -1,0 +1,8 @@
+name: "medium_plus"
+description: "Medium+, more aggressive on sparse/bright sky points."
+radius_keep_q: 0.99600
+density_keep_q: 0.28
+composite_keep_q: 0.30
+sor_std: 2.4
+hsv_v_min: 0.84
+hsv_s_max: 0.28

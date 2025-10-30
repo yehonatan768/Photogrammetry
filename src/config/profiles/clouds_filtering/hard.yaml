@@ -1,0 +1,8 @@
+name: "hard"
+description: "Aggressive cleanup. Keeps only strong, dense regions."
+radius_keep_q: 0.99000
+density_keep_q: 0.45
+composite_keep_q: 0.45
+sor_std: 2.0
+hsv_v_min: 0.82
+hsv_s_max: 0.32

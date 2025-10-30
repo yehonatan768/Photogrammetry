@@ -1,0 +1,6 @@
+name: "ultra"
+description: "Maximum strictness. Keep only dense, high-confidence core."
+radius_keep_q: 0.960
+density_keep_q: 0.70
+composite_keep_q: 0.60
+sor_std: 1.8

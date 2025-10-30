@@ -1,0 +1,8 @@
+name: "ultra_light"
+description: "Very light cleanup."
+radius_keep_q: 0.99995
+density_keep_q: 0.05
+composite_keep_q: 0.08
+sor_std: null
+hsv_v_min: null
+hsv_s_max: null

@@ -1,0 +1,6 @@
+name: "light"
+description: "Light pruning of outliers."
+radius_keep_q: 0.9995
+density_keep_q: 0.20
+composite_keep_q: 0.25
+sor_std: null

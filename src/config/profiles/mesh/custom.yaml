@@ -1,0 +1,12 @@
+name: custom
+description: "Preserve knowledge \u2014 practically no deletion"
+depth: 12
+crop: 0.008
+smooth_iters: 0
+adaptive: true
+adaptive_params:
+  iters: 3
+  low_q: 0.32
+  high_q: 0.93
+  gamma: 0.95
+cloud_cleanup: false

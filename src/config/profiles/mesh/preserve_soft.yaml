@@ -1,0 +1,12 @@
+name: preserve_soft
+description: "Soft preservation \u2014 tiniest touch"
+depth: 12
+crop: 0.003
+smooth_iters: 0
+adaptive: true
+adaptive_params:
+  iters: 1
+  low_q: 0.45
+  high_q: 0.88
+  gamma: 0.9
+cloud_cleanup: false

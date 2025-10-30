@@ -1,0 +1,6 @@
+name: "medium_light"
+description: "Medium-light pruning. Starts tightening geometry."
+radius_keep_q: 0.998
+density_keep_q: 0.30
+composite_keep_q: 0.35
+sor_std: 2.8
