@@ -1,43 +1,3 @@
-r"""
-nerfstudio.py — Steps 1 & 2 (dataset → train) with explicit project layout
-===========================================================================
-
-Purpose (unchanged)
--------------------
-Automate the first two stages of a Nerfstudio workflow:
-
-1) **Build dataset** from a video using ``ns-process-data video``.
-2) **Train nerfacto** using ``ns-train`` with a named experiment under
-   ``<PROJECT_DIR>/outputs/experiments``.
-
-What stayed the same
---------------------
-- Same globals (paths, flags, names) and same CLI tools (``ns-process-data``, ``ns-train``).
-- Same default behavior for frames target, viewer port, and environment variable
-  ``CUDA_VISIBLE_DEVICES``.
-- Skips dataset/training conditionally using ``SKIP_DATASET`` and ``SKIP_TRAIN``.
-- Produces identical folders/files as your original script.
-
-What's improved
----------------
-- Smaller, single-purpose helpers with clear docstrings.
-- Safer path handling and explicit, readable printing.
-- Command construction is centralized and easy to tweak.
-
-Requirements
-------------
-- Python 3.9+
-- Nerfstudio CLIs available on PATH: ``ns-process-data``, ``ns-train``
-- (Optional) ``ffmpeg`` improves video handling
-
-Usage
------
-    py nerfstudio.py
-
-Then open the viewer when prompted:
-    http://127.0.0.1:7007
-"""
-
 from __future__ import annotations
 
 import os
@@ -45,6 +5,7 @@ import sys
 import shutil
 import subprocess
 from pathlib import Path
+
 from src.config.base_config import (
     PROJECT_DIR,
     VIDEOS_DIR,
@@ -52,48 +13,22 @@ from src.config.base_config import (
     EXPERIMENTS_DIR,
     ensure_core_dirs,
 )
-
-# =========================
-# Global configuration
-# =========================
-
-# Absolute path to your Nerfstudio project root (adjust if needed).
-PROJECT_DIR: Path = Path(r"D:\Projects\NerfStudio")
-
-# Name of the video file located in <PROJECT_DIR>/videos/
-VIDEO_FILE: str = "DJI0450.mp4"
-
-# Logical name for the training run; this becomes the folder under output/experiments/
-EXPERIMENT_NAME: str = "DJI0450_high_quality"
-
-# Training length; higher = better quality but longer time.
-MAX_ITERS: int = 80_000
-
-# Controls which steps to run when re-running the script.
-SKIP_DATASET: bool = False
-SKIP_TRAIN: bool = False
-
-# Select which GPU to use (e.g., "0" for first GPU, "0,1" for multi-GPU if supported).
-CUDA_VISIBLE_DEVICES: str = "0"
-
-# Target number of frames Nerfstudio should sample from the video (None = let Nerfstudio decide).
-NUM_FRAMES_TARGET: int | None = 450
-
-# -------------------------
-# Directory layout (important)
-# -------------------------
-# We keep datasets under the original "<project>/outputs/dataset/...", but
-# **experiments** now go to "<project>/outputs/experiments/...".
-DATASET_ROOT: Path = PROJECT_DIR / "outputs" / "dataset"
-EXPERIMENT_ROOT: Path = PROJECT_DIR / "outputs" / "experiments"   # ← as requested
-
+from src.config.config_nerfstudio import (
+    VIDEO_FILE,
+    EXPERIMENT_NAME,
+    MAX_ITERS,
+    SKIP_DATASET,
+    SKIP_TRAIN,
+    CUDA_VISIBLE_DEVICES,
+    NUM_FRAMES_TARGET,
+)
 
 
 # =========================
 # Pretty printing
 # =========================
 def header(title: str) -> None:
-    """Print a section header for readability."""
+    """Human-friendly section header."""
     bar = "=" * max(64, len(title) + 6)
     print(f"\n{bar}\n>>> {title}\n{bar}\n")
 
@@ -103,40 +38,27 @@ def header(title: str) -> None:
 # =========================
 def run(cmd: str) -> None:
     """
-    Execute a shell command and raise on failure with a clear header.
+    Execute a shell command and raise if it fails.
 
-    Parameters
-    ----------
-    cmd : str
-        Fully-formed command line string (already quoted as needed).
-
-    Raises
-    ------
-    subprocess.CalledProcessError
-        If the command exits with a non-zero return code.
+    We keep shell=True because nerfstudio exposes console CLIs and we
+    want to pass them as one string.
     """
     header("Running command")
     print(cmd + "\n")
-    # shell=True is used to allow one-line strings; Nerfstudio CLIs are console commands.
     subprocess.run(cmd, shell=True, check=True)
 
 
 def exists_on_path(tool: str) -> bool:
-    """Return True if an executable is discoverable on PATH (via shutil.which)."""
+    """Return True if `tool` is discoverable on PATH."""
     return shutil.which(tool) is not None
 
 
 def ensure_exists(path: Path, kind: str = "dir") -> None:
     """
-    Ensure a path exists (for directories) or fail if a required file is missing.
+    Ensure path exists (for dirs) or complain if file is missing.
 
-    Parameters
-    ----------
-    path : Path
-        The file or directory path to validate.
-    kind : {"dir", "file"}
-        - "dir": creates the directory (parents included) if it does not exist.
-        - "file": raises FileNotFoundError if the file does not exist.
+    kind = "dir": create if missing
+    kind = "file": raise if missing
     """
     if kind == "dir":
         path.mkdir(parents=True, exist_ok=True)
@@ -149,15 +71,17 @@ def ensure_exists(path: Path, kind: str = "dir") -> None:
 
 def check_tools() -> None:
     """
-    Validate that required CLIs are on PATH and emit a warning for optional tools.
+    Sanity-check that nerfstudio CLIs are installed and reachable.
+    Warn if ffmpeg is missing.
     """
     required = ["ns-process-data", "ns-train"]
     missing = [t for t in required if not exists_on_path(t)]
     if missing:
-        raise RuntimeError("Missing Nerfstudio CLI(s): " + ", ".join(missing))
+        raise RuntimeError(
+            "Missing Nerfstudio CLI(s) on PATH: " + ", ".join(missing)
+        )
 
     if not exists_on_path("ffmpeg"):
-        # ffmpeg is not strictly required by Nerfstudio, but often improves handling of videos.
         print("⚠️  ffmpeg not found on PATH (recommended but not strictly required).")
 
 
@@ -166,8 +90,7 @@ def check_tools() -> None:
 # =========================
 def build_ns_process_cmd(video_path: Path, dataset_dir: Path) -> str:
     """
-    Construct the ``ns-process-data video`` command for dataset building.
-    Honors ``NUM_FRAMES_TARGET`` if provided.
+    Build the 'ns-process-data video' CLI command to create a Nerfstudio dataset.
     """
     parts = [
         "ns-process-data video",
@@ -179,10 +102,14 @@ def build_ns_process_cmd(video_path: Path, dataset_dir: Path) -> str:
     return " ".join(parts)
 
 
-def build_ns_train_cmd(dataset_dir: Path, experiments_dir: Path,
-                       exp_name: str, max_iters: int) -> str:
+def build_ns_train_cmd(
+    dataset_dir: Path,
+    experiments_dir: Path,
+    exp_name: str,
+    max_iters: int,
+) -> str:
     """
-    Construct the ``ns-train nerfacto`` command for training the model.
+    Build the 'ns-train nerfacto' CLI command to train NeRF.
     """
     parts = [
         "ns-train nerfacto",
@@ -202,16 +129,12 @@ def build_ns_train_cmd(dataset_dir: Path, experiments_dir: Path,
 # =========================
 def step1_build_dataset(video_path: Path, dataset_dir: Path) -> None:
     """
-    Create a Nerfstudio dataset from a video using ``ns-process-data video``.
+    Run ns-process-data to generate a Nerfstudio dataset from a video.
 
-    Notes
-    -----
-    - If ``dataset_dir`` is **not empty**, the step is skipped to avoid overwriting.
-    - This step extracts frames and runs COLMAP to estimate camera poses.
+    Will skip if dataset_dir is already non-empty, to avoid overwriting.
     """
     ensure_exists(dataset_dir, "dir")
 
-    # Safety: if the dataset directory is not empty, assume it already exists and skip.
     if any(dataset_dir.iterdir()):
         print(f"ℹ️  Dataset already exists: {dataset_dir}  (skipping)")
         return
@@ -223,72 +146,81 @@ def step1_build_dataset(video_path: Path, dataset_dir: Path) -> None:
 # =========================
 # Step 2 – Train NeRF
 # =========================
-def step2_train_nerf(dataset_dir: Path, experiments_dir: Path,
-                     exp_name: str, max_iters: int) -> None:
+def step2_train_nerf(
+    dataset_dir: Path,
+    experiments_dir: Path,
+    exp_name: str,
+    max_iters: int,
+) -> None:
     """
-    Train a nerfacto model using ``ns-train``, writing results under
-    ``<experiments_dir>/<exp_name>/nerfacto/<timestamp>/``.
+    Run ns-train nerfacto and start training.
     """
     ensure_exists(experiments_dir, "dir")
 
     cmd = build_ns_train_cmd(dataset_dir, experiments_dir, exp_name, max_iters)
 
-    print("🌐 Open the training viewer at: http://127.0.0.1:7007")
+    print("🌐 Viewer will be at: http://127.0.0.1:7007")
     run(cmd)
 
 
 # =========================
-# Main
+# Main pipeline
 # =========================
 def main() -> None:
-    """Wire together environment, validation, and the 2-stage pipeline."""
-    # Make sure the selected GPU(s) are used by downstream libraries (PyTorch, etc.).
+    """
+    1. Ensure folders exist (videos/, outputs/dataset, outputs/experiments).
+    2. Check required tools.
+    3. Build dataset from VIDEO_FILE (unless skipped).
+    4. Train NeRF into experiments/ (unless skipped).
+    """
+    # make sure outputs/* exists according to base_config
+    ensure_core_dirs()  # creates VIDEOS_DIR, DATASET_DIR, EXPERIMENTS_DIR, etc. :contentReference[oaicite:2]{index=2}
+
+    # GPU selection for downstream libs (torch etc.)
     os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES
 
-    # Early check for required tools
+    # confirm scripts we need are installed
     check_tools()
 
-    # Ensure expected directories and files exist
-    videos_dir = PROJECT_DIR / "videos"
-    ensure_exists(videos_dir, "dir")
-    ensure_exists(DATASET_ROOT, "dir")
-    ensure_exists(EXPERIMENT_ROOT, "dir")
+    # --- resolve key paths based on config + user choices ---
+    ensure_exists(VIDEOS_DIR, "dir")
+    ensure_exists(DATASET_DIR, "dir")
+    ensure_exists(EXPERIMENTS_DIR, "dir")
 
-    video_path = videos_dir / VIDEO_FILE
+    video_path = VIDEOS_DIR / VIDEO_FILE
     ensure_exists(video_path, "file")
 
-    # Dataset path for this video:
-    #   <PROJECT_DIR>/outputs/dataset/<video_stem>/
-    dataset_dir = DATASET_ROOT / video_path.stem
+    # dataset for this video goes under outputs/dataset/<video_stem>/
+    dataset_dir = DATASET_DIR / video_path.stem
 
-    # ---- Step 1: Build dataset (unless skipped) ----
+    # ---- Step 1: build dataset ----
     if not SKIP_DATASET:
         step1_build_dataset(video_path, dataset_dir)
     else:
         print("⏭️  Skipping Step 1 (dataset prep)")
 
-    # ---- Step 2: Train nerfacto (unless skipped) ----
+    # ---- Step 2: train nerfacto ----
     if not SKIP_TRAIN:
-        step2_train_nerf(dataset_dir, EXPERIMENT_ROOT, EXPERIMENT_NAME, MAX_ITERS)
+        step2_train_nerf(dataset_dir, EXPERIMENTS_DIR, EXPERIMENT_NAME, MAX_ITERS)
     else:
         print("⏭️  Skipping Step 2 (training)")
 
-    # Wrap-up
+    # ---- summary ----
     print("\nDone ✅ – Steps 1 & 2 completed.")
+    print(f"• Project root:     {PROJECT_DIR}")
+    print(f"• Video file:       {video_path.name}")
     print(f"• Dataset path:     {dataset_dir}")
-    print(f"• Experiments root: {EXPERIMENT_ROOT}")
+    print(f"• Experiments dir:  {EXPERIMENTS_DIR}")
     print(f"• Experiment name:  {EXPERIMENT_NAME}")
-    print("Next (optional): ns-export pointcloud → Poisson meshing → ns-render turntable.")
+    print("Next step: ns-export pointcloud → filtering → meshing → renders.")
 
 
 if __name__ == "__main__":
     try:
         main()
     except subprocess.CalledProcessError as e:
-        # Surface the called command's exit code and textual form for quick debugging.
         print(f"\n❌ Command failed with exit code {e.returncode}\n{e}\n")
         sys.exit(e.returncode)
     except Exception as e:
-        # Any other exception is printed plainly and returned as exit code 1.
         print(f"\n❌ {e}\n")
         sys.exit(1)
