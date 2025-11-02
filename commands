@@ -1,5 +1,0 @@
-open cloud compare via it's file:
-
-$env:QT_PLUGIN_PATH = "D:\Programs\CloudCompare\platforms"
-.\CloudCompare.exe
-
