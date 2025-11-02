@@ -9,10 +9,12 @@ torchaudio==2.2.2+cu121
 nerfstudio
 
 # --- Common dependencies (utilities, visualization) ---
-numpy
+numpy~=1.26.4
 scipy
 matplotlib
 opencv-python
 imageio
-tqdm
+tqdm~=4.67.1
 rich
+
+PyYAML~=6.0.2

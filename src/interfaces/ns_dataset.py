@@ -14,11 +14,10 @@ from src.config.base_config import (
     ensure_core_dirs,
 )
 from src.config.config_nerfstudio import (
-    NUM_FRAMES_TARGET,
     CUDA_VISIBLE_DEVICES,
     VIDEO_EXTS,
-    USE_CUSTOM_FFMPEG,
 )
+from src.config.config_ffmpeg import NUM_FRAMES_TARGET, USE_CUSTOM_FFMPEG
 from src.utils.ns_utils import (
     run,
     ensure_exists,
@@ -35,8 +34,11 @@ from src.interfaces.ffmpeg_extract import extract_frames_ffmpeg
 def _check_tools() -> None:
     """
     Verify required external tools exist before we start:
-    - ffmpeg (always needed if USE_CUSTOM_FFMPEG = True, recommended anyway)
     - ns-process-data (Nerfstudio dataset builder)
+    - ffmpeg (must exist if USE_CUSTOM_FFMPEG=True, optional otherwise)
+
+    Raises:
+        RuntimeError: if required CLI tools are missing.
     """
     # ns-process-data is ALWAYS required
     required = ["ns-process-data"]
@@ -46,7 +48,7 @@ def _check_tools() -> None:
             "Missing Nerfstudio CLI(s) on PATH: " + ", ".join(missing)
         )
 
-    # ffmpeg:
+    # ffmpeg warning / requirement
     if not exists_on_path("ffmpeg"):
         if USE_CUSTOM_FFMPEG:
             raise RuntimeError("ffmpeg not found on PATH but USE_CUSTOM_FFMPEG=True.")
@@ -56,6 +58,7 @@ def _check_tools() -> None:
 def _list_videos(videos_dir: Path) -> list[Path]:
     """
     Return all allowed video files under `videos_dir`, newest first.
+    Allowed extensions are defined in VIDEO_EXTS.
     """
     if not videos_dir.exists():
         raise FileNotFoundError(f"videos folder not found: {videos_dir}")
@@ -123,6 +126,11 @@ def _make_unique_dataset_dir(base_stem: str) -> Path:
     Strategy:
     - Prefer DATASET_DIR/<base_stem> if not used yet.
     - Otherwise create DATASET_DIR/<base_stem>_verK with next available K.
+
+    Example:
+        base_stem = "Barn"
+        Existing: Barn/, Barn_ver1/, Barn_ver2/
+        New run:  Barn_ver3/
     """
     ensure_exists(DATASET_DIR, "dir")
 
@@ -131,13 +139,13 @@ def _make_unique_dataset_dir(base_stem: str) -> Path:
         if p.is_dir() and (p.name == base_stem or p.name.startswith(base_stem + "_ver")):
             existing.append(p.name)
 
-    # If <base_stem> doesn't exist yet -> use it
+    # First run -> plain "<base_stem>"
     candidate = DATASET_DIR / base_stem
     if base_stem not in existing:
         candidate.mkdir(parents=True, exist_ok=True)
         return candidate
 
-    # Otherwise bump version
+    # Subsequent runs -> "<base_stem>_verK"
     max_ver = 0
     for name in existing:
         stem, ver = _split_ver(name)
@@ -155,9 +163,11 @@ def _make_unique_dataset_dir(base_stem: str) -> Path:
 def _build_ns_process_cmd_video(video_path: Path, dataset_dir: Path) -> str:
     """
     Nerfstudio handles:
-    - extracting frames with ffmpeg internally
+    - extracting frames internally from the video
     - running COLMAP
     - generating transforms.json
+
+    This path is used if USE_CUSTOM_FFMPEG == False.
     """
     parts = [
         "ns-process-data video",
@@ -171,40 +181,62 @@ def _build_ns_process_cmd_video(video_path: Path, dataset_dir: Path) -> str:
 
 def _build_ns_process_cmd_images(frames_dir: Path, dataset_dir: Path) -> str:
     """
-    We already extracted frames into frames_dir.
-    Nerfstudio should:
-    - run COLMAP on those frames
-    - generate transforms.json
+    Build the ns-process-data command for image mode.
+
+    We:
+    - point Nerfstudio at the extracted frames directory
+    - tell it where to write the dataset
+    - force a matching method that does NOT rely on vocab_tree
+      to avoid the FAISS/FLANN vocab tree incompatibility in new COLMAP.
+
+    Options for --matching-method that are common:
+      - sequential  (good for video trajectories)
+      - exhaustive  (heavier, all-vs-all)
+      - vocab_tree  (fast, but currently breaking for you)
+
+    We'll use 'sequential' here.
     """
     parts = [
         "ns-process-data images",
         f'--data "{str(frames_dir)}"',
         f'--output-dir "{str(dataset_dir)}"',
+        "--matching-method sequential",
     ]
     return " ".join(parts)
 
 
-def _run_ns_process(video_path: Path, dataset_dir: Path) -> None:
+def _run_ns_process(video_path: Path, dataset_dir: Path) -> tuple[int, str]:
     """
     Create the dataset in dataset_dir.
 
-    If USE_CUSTOM_FFMPEG:
-        1. Extract frames with our custom ffmpeg pipeline into dataset_dir/images_raw
-        2. Call `ns-process-data images ...`
-    Else:
-        Call `ns-process-data video ...` directly.
+    Branch A (USE_CUSTOM_FFMPEG == True):
+        1. Extract 'valuable' frames with our ffmpeg pipeline (scene detection,
+           fps limit, scaling, etc.) into dataset_dir/images_raw
+        2. Call `ns-process-data images ...` to run COLMAP + build transforms.json
+
+    Branch B (USE_CUSTOM_FFMPEG == False):
+        1. Call `ns-process-data video ...` and let Nerfstudio handle everything.
+
+    Returns:
+        (frame_count, mode)
+        frame_count: how many frames we extracted (0 if we let nerfstudio do it internally)
+        mode: "custom_ffmpeg" or "nerfstudio_video"
     """
     ensure_exists(dataset_dir, "dir")
 
     if USE_CUSTOM_FFMPEG:
         frames_dir = dataset_dir / "images_raw"
-        extract_frames_ffmpeg(video_path, frames_dir, verbose=True)
+        frame_count = extract_frames_ffmpeg(video_path, frames_dir, verbose=True)
 
         cmd = _build_ns_process_cmd_images(frames_dir, dataset_dir)
-    else:
-        cmd = _build_ns_process_cmd_video(video_path, dataset_dir)
+        run(cmd)
 
+        return frame_count, "custom_ffmpeg"
+
+    # else: let nerfstudio do the extraction from the video
+    cmd = _build_ns_process_cmd_video(video_path, dataset_dir)
     run(cmd)
+    return 0, "nerfstudio_video"
 
 
 # =========================
@@ -216,25 +248,26 @@ def run_dataset() -> Dict[str, Any]:
     Build a Nerfstudio-ready dataset from a chosen video.
 
     Steps:
-    1. Make sure core directories exist (videos/, outputs/dataset/, ...).
+    1. Ensure project dirs (videos/, outputs/dataset/, outputs/experiments/, etc.).
     2. Set CUDA_VISIBLE_DEVICES (GPU selection).
     3. Verify external tools (ns-process-data, ffmpeg if needed).
     4. Ask user which video to process.
     5. Create a NEW UNIQUE dataset directory under outputs/dataset/...:
           <video_stem>/, <video_stem>_ver1/, <video_stem>_ver2/, ...
-    6. Either:
-        a) Run ffmpeg ourselves -> dump frames -> `ns-process-data images ...`
-           (if USE_CUSTOM_FFMPEG == True)
-       OR
-        b) Let nerfstudio handle video directly with `ns-process-data video ...`
-           (if USE_CUSTOM_FFMPEG == False)
-    7. Print summary and return metadata for next pipeline stage.
+    6. If USE_CUSTOM_FFMPEG == True:
+         - extract only "valuable" frames (scene change, etc.) via ffmpeg
+         - run `ns-process-data images ...`
+       Else:
+         - run `ns-process-data video ...`
+    7. Print summary and return metadata for next pipeline stage (training).
 
     Returns:
         {
-            "video_path": Path,      # path to chosen video file
-            "dataset_dir": Path,     # unique dataset directory we just created
-            "video_stem": str        # e.g. "Barn"
+            "video_path": Path,
+            "dataset_dir": Path,
+            "video_stem": str,
+            "frame_count": int,
+            "mode": str,
         }
     """
     # dirs and GPU
@@ -254,33 +287,40 @@ def run_dataset() -> Dict[str, Any]:
     dataset_dir = _make_unique_dataset_dir(base_stem)
 
     # generate dataset with ns-process-data (and maybe ffmpeg first)
-    _run_ns_process(video_path, dataset_dir)
+    frame_count, mode = _run_ns_process(video_path, dataset_dir)
 
     print("\n[DATASET STEP DONE ✅]")
     print(f"• Video file:        {video_path.name}")
     print(f"• Dataset directory: {dataset_dir}")
     print(f"• Custom ffmpeg:     {USE_CUSTOM_FFMPEG}")
+    if USE_CUSTOM_FFMPEG:
+        print(f"• Frames kept:       {frame_count} (scene-filtered)")
+    else:
+        print(f"• Frames kept:       handled internally by nerfstudio")
 
     return {
         "video_path": video_path,
         "dataset_dir": dataset_dir,
         "video_stem": base_stem,
+        "frame_count": frame_count,
+        "mode": mode,
     }
 
 
 def main() -> None:
     """
     Standalone runner.
-    You can run:
+    Usage:
         python -m src.interfaces.ns_dataset
     or:
         python path/to/ns_dataset.py
-    and it will:
-      - ask you which video to use,
-      - build a new dataset version folder,
-      - run custom ffmpeg (if enabled),
-      - run COLMAP + transforms,
-      - print summary.
+
+    This will:
+    - ask you which video to use,
+    - create a new unique dataset folder,
+    - extract good frames (scene-based) if USE_CUSTOM_FFMPEG=True,
+    - run COLMAP + transforms,
+    - print summary.
     """
     try:
         info = run_dataset()
@@ -288,6 +328,8 @@ def main() -> None:
         print(f"- Project root:     {PROJECT_DIR}")
         print(f"- Dataset dir:      {info['dataset_dir']}")
         print(f"- Video stem:       {info['video_stem']}")
+        print(f"- Frames kept:      {info['frame_count']}")
+        print(f"- Mode:             {info['mode']}")
     except subprocess.CalledProcessError as e:
         print(f"\n❌ Subprocess failed with exit {e.returncode}\n{e}\n")
         sys.exit(e.returncode)

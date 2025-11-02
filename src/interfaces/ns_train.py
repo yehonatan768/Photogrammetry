@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sys
 import re
-import subprocess
 from pathlib import Path
 from typing import Dict, Any
 
@@ -68,10 +67,13 @@ def _build_ns_train_cmd(
         f'--output-dir "{str(experiments_dir)}"',
         f'--experiment-name "{exp_name}"',
         f"--max-num-iterations {max_iters}",
+        "--train-camera-optimizer True",
         "--vis viewer",
         "--viewer.websocket-port 7007",
         "--viewer.quit-on-train-completion True",
+        "--pipeline.datamanager.train-num-rays-per-batch 8192",
     ]
+
     return " ".join(parts)
 
 
