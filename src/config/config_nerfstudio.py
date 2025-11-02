@@ -18,3 +18,4 @@ MAX_ITERS: int = 100_000
 # Should we skip dataset building / training if we're rerunning?
 SKIP_DATASET: bool = True
 SKIP_TRAIN: bool = True
+NUM_RAYS_PER_BATCH: int = 4096

@@ -10,6 +10,7 @@ from src.config.base_config import (
 )
 from src.config.config_nerfstudio import (
     MAX_ITERS,
+    NUM_RAYS_PER_BATCH,
 )
 from src.utils.ns_utils import ensure_exists, run
 # train_nerf_model logic is basically build_ns_train_cmd+run in your file. :contentReference[oaicite:10]{index=10}
@@ -58,22 +59,17 @@ def _build_ns_train_cmd(
     exp_name: str,
     max_iters: int,
 ) -> str:
-    """
-    Mirrors build_ns_train_cmd from your ns_train.py. :contentReference[oaicite:13]{index=13}
-    """
     parts = [
         "ns-train nerfacto",
         f'--data "{str(dataset_dir)}"',
         f'--output-dir "{str(experiments_dir)}"',
         f'--experiment-name "{exp_name}"',
         f"--max-num-iterations {max_iters}",
-        "--train-camera-optimizer True",
         "--vis viewer",
         "--viewer.websocket-port 7007",
         "--viewer.quit-on-train-completion True",
-        "--pipeline.datamanager.train-num-rays-per-batch 8192",
+        f"--pipeline.datamanager.train-num-rays-per-batch {NUM_RAYS_PER_BATCH}",
     ]
-
     return " ".join(parts)
 
 
