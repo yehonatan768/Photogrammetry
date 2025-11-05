@@ -3,7 +3,6 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 from tqdm import tqdm
@@ -32,24 +31,40 @@ class MeshParams:
     adapt_high_q: float
     adapt_gamma: float
     cloud_cleanup: bool | dict
-    # New options
+    # Performance/quality knobs
+    voxel_size: float = 0.0        # >0 → voxel downsample before normals/poisson
+    downsample_if_over: int = 2_000_000  # apply voxel only if point count exceeds this
+    # Coloring & topology
     colorize: bool = True          # transfer colors from point cloud to mesh
-    color_k: int = 3               # NN count for color transfer
+    color_k: int = 1               # NN count for color transfer (1 is faster)
     decimate_target: int = 0       # 0 = off, else target #triangles
     method: str = "poisson"        # "poisson" or "bpa"
-    save_obj: bool = True          # also export OBJ next to PLY
+    # Saving
+    save_obj: bool = False         # disabled by request: save ONLY PLY
 
 
-def _estimate_normals(pcd: "open3d.geometry.PointCloud") -> None:
+def _estimate_normals_scaled(pcd: "open3d.geometry.PointCloud") -> None:
+    """
+    Estimate normals with a search radius scaled to the scene size
+    (derived from the AABB diagonal). Uses fewer neighbors for speed.
+    """
     o3d = _o3d()
+    aabb = pcd.get_axis_aligned_bounding_box()
+    mins = np.asarray(aabb.get_min_bound())
+    maxs = np.asarray(aabb.get_max_bound())
+    diag = float(np.linalg.norm(maxs - mins))
+    # Radius at ~1% of scene diagonal (tweak as needed).
+    search_r = max(diag * 0.01, 1e-4)
+    max_nn = 30
+
     for _ in tqdm(range(1), desc="Estimate normals"):
         pcd.estimate_normals(
             search_param=o3d.geometry.KDTreeSearchParamHybrid(
-                radius=0.05,  # adjust if your scale is larger/smaller
-                max_nn=50,
+                radius=search_r,
+                max_nn=max_nn,
             )
         )
-        pcd.orient_normals_consistent_tangent_plane(50)
+        pcd.orient_normals_consistent_tangent_plane(max_nn)
 
 
 def _poisson(pcd: "open3d.geometry.PointCloud", depth: int):
@@ -133,7 +148,7 @@ def _adaptive_smooth(mesh: "open3d.geometry.TriangleMesh",
 
     o3d = _o3d()
     for _ in tqdm(range(1), desc="Adaptive smoothing"):
-        m_s = mesh.filter_smooth_taubin(number_of_iterations=max(1, int(iters)))
+        m_s = mesh.filter_smooth_taubin(number_of_iterations=max(1), lambda_filter=0.5, mu_filter=-0.53)
 
         v0 = np.asarray(mesh.vertices)
         v1 = np.asarray(m_s.vertices)
@@ -175,11 +190,10 @@ def _final_cleanup(mesh: "open3d.geometry.TriangleMesh") -> None:
 
 def _colorize_from_pcd(mesh: "open3d.geometry.TriangleMesh",
                        pcd: "open3d.geometry.PointCloud",
-                       k: int = 3) -> None:
+                       k: int = 1) -> None:
     """Transfer colors to mesh vertices from nearest k PCD points (average)."""
     if not pcd.has_colors():
         return
-    import numpy as np
     o3d = _o3d()
     pts = np.asarray(pcd.points)
     cols = np.asarray(pcd.colors)
@@ -189,7 +203,7 @@ def _colorize_from_pcd(mesh: "open3d.geometry.TriangleMesh",
         import scipy.spatial as sps  # type: ignore
         kd = sps.cKDTree(pts)
         V = np.asarray(mesh.vertices)
-        d, idx = kd.query(V, k=max(1, int(k)))
+        _, idx = kd.query(V, k=max(1, int(k)))
         if k == 1:
             C = cols[idx]
         else:
@@ -197,7 +211,6 @@ def _colorize_from_pcd(mesh: "open3d.geometry.TriangleMesh",
         mesh.vertex_colors = o3d.utility.Vector3dVector(np.clip(C, 0.0, 1.0))
     except Exception:
         # Fallback to 1-NN using Open3D KDTree
-        k = 1
         o3d_kd = o3d.geometry.KDTreeFlann(pcd)
         V = np.asarray(mesh.vertices)
         out_cols = np.zeros((len(V), 3), dtype=np.float32)
@@ -222,9 +235,9 @@ def _decimate(mesh: "open3d.geometry.TriangleMesh",
     return mesh
 
 
-def _save_all(mesh: "open3d.geometry.TriangleMesh",
-              out_ply: Path,
-              save_obj: bool = True) -> None:
+def _save_ply_only(mesh: "open3d.geometry.TriangleMesh",
+                   out_ply: Path) -> None:
+    """Save ONLY PLY (no OBJ)."""
     o3d = _o3d()
     out_ply.parent.mkdir(parents=True, exist_ok=True)
     o3d.io.write_triangle_mesh(
@@ -233,15 +246,6 @@ def _save_all(mesh: "open3d.geometry.TriangleMesh",
         write_vertex_colors=True,
         write_vertex_normals=True,
     )
-    if save_obj:
-        out_obj = out_ply.with_suffix(".obj")
-        o3d.io.write_triangle_mesh(
-            str(out_obj),
-            mesh,
-            write_vertex_colors=True,
-            write_vertex_normals=True,
-        )
-        print(f"OBJ saved: {out_obj}")
     print(f"PLY saved: {out_ply}")
 
 
@@ -253,8 +257,18 @@ def build_mesh(pointcloud_ply: Path, out_mesh_ply: Path, params: MeshParams) -> 
     if pcd.is_empty():
         raise RuntimeError("Loaded point cloud is empty")
 
-    _estimate_normals(pcd)
+    # Optional voxel downsample (only if large enough)
+    if params.voxel_size and params.voxel_size > 0.0:
+        n0 = len(pcd.points)
+        if n0 > int(params.downsample_if_over):
+            print(f"Voxel downsample ({params.voxel_size}) on {n0:,} pts …")
+            pcd = pcd.voxel_down_sample(voxel_size=float(params.voxel_size))
+            print(f"→ {len(pcd.points):,} pts after voxel")
 
+    # Scaled normals
+    _estimate_normals_scaled(pcd)
+
+    # Reconstruction
     if params.method.lower() == "bpa":
         mesh, densities = _bpa(pcd)
         dens_kept = densities  # uniform placeholder for later steps
@@ -262,6 +276,7 @@ def build_mesh(pointcloud_ply: Path, out_mesh_ply: Path, params: MeshParams) -> 
         mesh, densities = _poisson(pcd, depth=params.depth)
         dens_kept = _crop_by_density(mesh, densities, q=params.crop_low_q)
 
+    # Optional cloud/sky cleanup
     if params.cloud_cleanup:
         if isinstance(params.cloud_cleanup, dict):
             height_q = float(params.cloud_cleanup.get("height_q", 0.90))
@@ -288,18 +303,19 @@ def build_mesh(pointcloud_ply: Path, out_mesh_ply: Path, params: MeshParams) -> 
             float(params.adapt_gamma),
         )
 
+    # Decimate BEFORE colorization (faster coloring on fewer vertices)
+    mesh = _decimate(mesh, int(params.decimate_target))
+
     # Color transfer from PCD
     if params.colorize:
         _colorize_from_pcd(mesh, pcd, k=int(params.color_k))
-
-    # Optional decimation for uniform tri structure
-    mesh = _decimate(mesh, int(params.decimate_target))
 
     # Cleanup & normals
     _final_cleanup(mesh)
     mesh.compute_vertex_normals()
 
-    _save_all(mesh, out_mesh_ply, save_obj=bool(params.save_obj))
+    # Save ONLY PLY
+    _save_ply_only(mesh, out_mesh_ply)
     return out_mesh_ply
 
 
@@ -321,12 +337,14 @@ def pipeline() -> int:
             adapt_high_q=float(preset["adapt_high_q"]),
             adapt_gamma=float(preset["adapt_gamma"]),
             cloud_cleanup=preset.get("cloud_cleanup", False),
-            # New preset keys are optional; set sane defaults if missing
+            # Optional/new keys with safe defaults:
+            voxel_size=float(preset.get("voxel_size", 0.0)),
+            downsample_if_over=int(preset.get("downsample_if_over", 2_000_000)),
             colorize=bool(preset.get("colorize", True)),
-            color_k=int(preset.get("color_k", 3)),
+            color_k=int(preset.get("color_k", 1)),
             decimate_target=int(preset.get("decimate_target", 0)),
             method=str(preset.get("method", "poisson")),
-            save_obj=bool(preset.get("save_obj", True)),
+            save_obj=bool(preset.get("save_obj", False)),  # ignored; always PLY only
         )
 
         out_mesh = export_dir / "mesh.ply"
