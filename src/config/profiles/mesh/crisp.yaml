@@ -1,12 +1,16 @@
-name: crisp
-description: Crisp but gentle (limits bubbles)
-depth: 12
-crop: 0.01
-smooth_iters: 0
+depth: 10
+crop: 0.12
+smooth: 3
 adaptive: true
-adaptive_params:
-  iters: 3
-  low_q: 0.35
-  high_q: 0.9
-  gamma: 0.95
-cloud_cleanup: false
+adapt_iters: 15
+adapt_low_q: 0.05
+adapt_high_q: 0.90
+adapt_gamma: 1.4
+cloud_cleanup:
+  height_q: 0.88
+  low_density_q: 0.25
+colorize: true
+color_k: 4
+decimate_target: 300000
+method: poisson
+save_obj: true

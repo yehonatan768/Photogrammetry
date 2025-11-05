@@ -10,6 +10,7 @@ import numpy as np
 from tqdm import tqdm
 
 from src.config.base_config import EXPORTS_DIR, ensure_core_dirs
+from src.utils.pcd import compute_signals, load_point_cloud, o3d_module as _o3d
 from src.utils.menu import (
     choose_export_folder,
     choose_ply_file,
@@ -57,21 +58,8 @@ class FilterParams:
 
 
 # =========================
-# Low-level helpers
+# Low-level helpers (color / z only)
 # =========================
-def _o3d() -> "module":
-    """
-    Lazy import of open3d so importing this file doesn't eagerly require it.
-    """
-    import open3d as o3d  # type: ignore
-    return o3d
-
-
-def robust_center(points: np.ndarray) -> np.ndarray:
-    """Median per axis, more stable than mean with outliers."""
-    return np.median(points, axis=0)
-
-
 def _z(x: np.ndarray) -> np.ndarray:
     """z-score normalize with tiny epsilon."""
     mu = float(np.mean(x))
@@ -84,7 +72,6 @@ def _rgb_to_hsv(rgb: np.ndarray) -> np.ndarray:
     Convert RGB [0,1] -> HSV [0,1].
     We only care about S (saturation) and V (value/brightness) for sky removal.
     """
-    r, g, b = rgb[:, 0], rgb[:, 1], rgb[:, 2]
     maxc = np.max(rgb, axis=1)
     minc = np.min(rgb, axis=1)
     v = maxc
@@ -109,57 +96,6 @@ def _color_sky_mask(
     hsv = _rgb_to_hsv(colors_01)
     S, V = hsv[:, 1], hsv[:, 2]
     return (V >= hsv_v_min) & (S <= hsv_s_max)
-
-
-def load_point_cloud(path: Path) -> "open3d.geometry.PointCloud":
-    """Read PLY and make sure it's not empty."""
-    o3d = _o3d()
-    pcd = o3d.io.read_point_cloud(str(path))
-    if pcd.is_empty():
-        raise RuntimeError("Input point cloud is empty")
-    return pcd
-
-
-def knn_k_distance(points: np.ndarray, k: int = 8) -> np.ndarray:
-    """
-    Approximate density via k-th neighbor distance.
-    For each point:
-      - build KDTreeFlann
-      - query k+1 because first neighbor is itself
-      - store sqrt(last_dist)
-    """
-    o3d = _o3d()
-    pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points))
-    kdt = o3d.geometry.KDTreeFlann(pcd)
-
-    n = len(points)
-    dists = np.empty(n, dtype=np.float32)
-
-    # process in chunks to avoid super-slow loops on huge clouds
-    chunk = max(10_000, n // 200)
-    for start in tqdm(range(0, n, chunk), desc="Compute kNN distances", unit="pts"):
-        end = min(start + chunk, n)
-        for i in range(start, end):
-            ok, _, sq = kdt.search_knn_vector_3d(pcd.points[i], k + 1)
-            dists[i] = float(np.sqrt(sq[-1])) if ok >= k + 1 else np.inf
-    return dists
-
-
-def compute_signals(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Per-point signals:
-      radius     = distance from robust center
-      s_dens     = density proxy (1 / k-dist)
-      composite  = z(s_dens) + z(-radius)
-    """
-    c = robust_center(points)
-    radius = np.linalg.norm(points - c, axis=1)
-
-    d_knn = knn_k_distance(points, k=8)
-    s_dens = 1.0 / (1e-9 + d_knn)
-
-    composite = _z(s_dens) + _z(-radius)
-    return radius, s_dens, composite
 
 
 def thresholds_from_quantiles(
@@ -284,22 +220,7 @@ def filter_clouds(
 ) -> Tuple[Path, int, int]:
     """
     Apply full cloud filtering pipeline and write result to out_ply.
-
-    Steps:
-    1. Load point cloud.
-    2. Optional color-based sky removal.
-    3. Compute geometric/density signals.
-    4. Select core points by quantiles (radius, density, composite).
-    5. Fallback if too tiny.
-    6. Optional SOR.
-    7. Save.
-
-    Returns
-    -------
-    (out_path, n_in, n_out)
     """
-    o3d = _o3d()
-
     header("Cloud filter")
 
     # 1. load
@@ -315,7 +236,7 @@ def filter_clouds(
         write_ply(out_ply, pcd)
         return out_ply, n0, 0
 
-    # 3. compute signals
+    # 3. compute signals (shared util)
     P = np.asarray(pcd.points)
     radius, s_dens, composite = compute_signals(P)
 
@@ -477,17 +398,17 @@ def pipeline() -> int:
         # 3: pick preset
         if args.mode is None:
             # interactive menu from available YAML presets in clouds_filtering/
-            preset_name = choose_preset("clouds")
+            preset_name = choose_preset("clouds_filtering")
         else:
             preset_name = args.mode
-            available = list_presets("clouds")
+            available = list_presets("clouds_filtering")
             if preset_name not in available:
                 raise ValueError(
                     f"Unknown preset '{preset_name}'. "
                     f"Available: {', '.join(available)}"
                 )
         # load YAML for that preset into params
-        preset_dict = load_preset("clouds", preset_name)
+        preset_dict = load_preset("clouds_filtering", preset_name)
 
         params = FilterParams(
             radius_keep_q=float(preset_dict["radius_keep_q"]),

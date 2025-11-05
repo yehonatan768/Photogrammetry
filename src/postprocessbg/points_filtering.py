@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 from tqdm import tqdm
-
+from src.utils.pcd import compute_signals, load_point_cloud
 from src.config.base_config import ensure_core_dirs
 from src.utils.menu import (
     choose_export_folder,
@@ -17,6 +17,16 @@ from src.utils.menu import (
 from src.utils.preset_loader import load_preset
 
 ensure_core_dirs()
+
+
+def header(title: str) -> None:
+    bar = "=" * max(64, len(title) + 6)
+    print(f"\n{bar}\n>>> {title}\n{bar}\n")
+
+
+def _o3d() -> "module":
+    import open3d as o3d  # type: ignore
+    return o3d
 
 
 # =========================
@@ -39,95 +49,13 @@ class PrefilterParams:
     sor_std: Optional[float]
 
 
-# =========================
-# Small utilities
-# =========================
-def header(title: str) -> None:
-    """Print a pretty section header to the console."""
-    bar = "=" * max(64, len(title) + 6)
-    print(f"\n{bar}\n>>> {title}\n{bar}\n")
-
-
-def _o3d() -> "module":
-    """
-    Lazy import of open3d so that importing this module doesn't immediately
-    require open3d. Also makes mocking/tests easier.
-    """
-    import open3d as o3d  # type: ignore
-    return o3d
-
-
-def robust_center(points: np.ndarray) -> np.ndarray:
-    """Return a robust center estimate: per-axis median of points."""
-    return np.median(points, axis=0)
-
-
-def _zscore(x: np.ndarray) -> np.ndarray:
-    """Standardize to z-scores with a tiny epsilon for stability."""
-    mu = float(np.mean(x))
-    sd = float(np.std(x) + 1e-9)
-    return (x - mu) / sd
-
-
-def load_point_cloud(path: Path) -> "open3d.geometry.PointCloud":
-    """Read a point cloud from disk and validate it is non-empty."""
-    o3d = _o3d()
-    pcd = o3d.io.read_point_cloud(str(path))
-    if pcd.is_empty():
-        raise RuntimeError("Input point cloud is empty")
-    return pcd
-
-
-def knn_k_distance(points: np.ndarray, k: int = 8) -> np.ndarray:
-    """
-    Return distance to the k-th nearest neighbor for each point.
-    Uses KDTreeFlann like your original flow: we query k+1 because
-    the first neighbor is the point itself.
-    """
-    o3d = _o3d()
-    pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points))
-    kdt = o3d.geometry.KDTreeFlann(pcd)
-
-    n = len(points)
-    dists = np.empty(n, dtype=np.float32)
-
-    # chunking to avoid crazy-slow tight loops on very large clouds
-    chunk = max(10_000, n // 200)
-    for start in tqdm(range(0, n, chunk), desc="Compute kNN distances", unit="pts"):
-        end = min(start + chunk, n)
-        for i in range(start, end):
-            ok, _, sq = kdt.search_knn_vector_3d(pcd.points[i], k + 1)
-            # last dist in sq is the k-th neighbor (excluding self)
-            dists[i] = float(np.sqrt(sq[-1])) if ok >= k + 1 else np.inf
-    return dists
-
-
-def compute_features(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Compute per-point:
-      - radius from robust center
-      - density proxy = 1 / k-distance
-      - composite score = z(density) + z(-radius)
-    """
-    c = robust_center(points)
-    radius = np.linalg.norm(points - c, axis=1)
-
-    d_knn = knn_k_distance(points, k=8)
-    s_dens = 1.0 / (1e-9 + d_knn)
-
-    composite = _zscore(s_dens) + _zscore(-radius)
-    return radius, s_dens, composite
-
-
 def thresholds_from_quantiles(
     radius: np.ndarray,
     s_dens: np.ndarray,
     composite: np.ndarray,
     params: PrefilterParams,
 ) -> Tuple[float, float, float]:
-    """
-    Turn the preset quantiles into concrete numeric thresholds.
-    """
+    """Turn the preset quantiles into concrete numeric thresholds."""
     r_thr = float(np.quantile(radius, params.radius_keep_q))
     d_thr = float(np.quantile(s_dens, params.density_keep_q))
     s_thr = float(np.quantile(composite, params.composite_keep_q))
@@ -207,9 +135,6 @@ def maybe_run_sor(
     return pcd
 
 
-# =========================
-# Core operation
-# =========================
 def prefilter_keep_core(
     in_ply: Path,
     out_ply: Path,
@@ -218,14 +143,6 @@ def prefilter_keep_core(
     """
     Filter the point cloud `in_ply` using selection logic derived from params,
     then save it to `out_ply`.
-
-    Behavior:
-    - compute radius / density / composite
-    - pick thresholds from quantiles in params
-    - intersect all masks
-    - fallback to loose radius-only if result is too tiny
-    - run optional SOR
-    - save
     """
     o3d = _o3d()
 
@@ -236,8 +153,8 @@ def prefilter_keep_core(
     n = len(P)
     print(f"Points in: {n:,}")
 
-    # 1. features
-    radius, s_dens, composite = compute_features(P)
+    # 1. features (shared util)
+    radius, s_dens, composite = compute_signals(P)
 
     # 2. thresholds
     r_thr, d_thr, s_thr = thresholds_from_quantiles(radius, s_dens, composite, params)
@@ -280,9 +197,6 @@ def prefilter_keep_core(
     return out_ply
 
 
-# =========================
-# Interactive pipeline
-# =========================
 def pipeline() -> int:
     """
     Flow:
@@ -293,9 +207,7 @@ def pipeline() -> int:
     """
     try:
         export_dir = choose_export_folder()
-
         in_ply = choose_ply_file(export_dir)
-
         preset_name = choose_preset("points")
 
         preset_dict = load_preset("points_filtering", preset_name)
@@ -311,7 +223,6 @@ def pipeline() -> int:
         )
 
         out_ply = export_dir / f"{preset_name}_filtered.ply"
-
         prefilter_keep_core(in_ply, out_ply, params)
 
         print("\n=== SUMMARY ===")

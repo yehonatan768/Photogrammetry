@@ -10,7 +10,7 @@ ensure_core_dirs()
 # root of all preset YAMLs
 PRESETS_ROOT = Path(__file__).resolve().parents[1] / "config" / "profiles"
 
-PresetType = Literal["mesh", "clouds", "points_filtering"]
+PresetType = Literal["mesh", "clouds_filtering", "points_filtering"]
 
 
 def _dir_for(kind: PresetType) -> Path:

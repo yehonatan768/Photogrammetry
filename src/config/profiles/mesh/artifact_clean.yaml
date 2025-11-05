@@ -1,14 +1,16 @@
-name: artifact_clean
-description: "Artifact cleanup \u2014 gentle version"
-depth: 12
-crop: 0.016
-smooth_iters: 0
+depth: 9
+crop: 0.20
+smooth: 6
 adaptive: true
-adaptive_params:
-  iters: 3
-  low_q: 0.3
-  high_q: 0.92
-  gamma: 0.95
+adapt_iters: 12
+adapt_low_q: 0.10
+adapt_high_q: 0.90
+adapt_gamma: 2.0
 cloud_cleanup:
-  height_q: 0.96
-  low_density_q: 0.15
+  height_q: 0.85
+  low_density_q: 0.35
+colorize: true
+color_k: 3
+decimate_target: 150000
+method: poisson
+save_obj: true

@@ -1,0 +1,16 @@
+depth: 9
+crop: 0.20
+smooth: 3
+adaptive: true
+adapt_iters: 10
+adapt_low_q: 0.15
+adapt_high_q: 0.85
+adapt_gamma: 1.5
+cloud_cleanup:
+  height_q: 0.90
+  low_density_q: 0.30
+colorize: true
+color_k: 3
+decimate_target: 180000
+method: poisson
+save_obj: true

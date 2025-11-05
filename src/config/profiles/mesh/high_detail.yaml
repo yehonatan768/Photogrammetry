@@ -1,12 +1,16 @@
-name: high_detail
-description: High detail but still restrained
-depth: 13
-crop: 0.012
-smooth_iters: 0
+depth: 11
+crop: 0.10
+smooth: 2
 adaptive: true
-adaptive_params:
-  iters: 3
-  low_q: 0.32
-  high_q: 0.92
-  gamma: 0.95
-cloud_cleanup: false
+adapt_iters: 18
+adapt_low_q: 0.05
+adapt_high_q: 0.95
+adapt_gamma: 1.2
+cloud_cleanup:
+  height_q: 0.90
+  low_density_q: 0.20
+colorize: true
+color_k: 5
+decimate_target: 0
+method: poisson
+save_obj: true
