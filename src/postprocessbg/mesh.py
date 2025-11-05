@@ -5,19 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import open3d
 from tqdm import tqdm
 
 from src.utils.pcd import o3d_module as _o3d, robust_center
 from src.config.base_config import ensure_core_dirs
 from src.utils.menu import choose_export_folder, choose_ply_file, choose_preset
 from src.utils.preset_loader import load_preset
+from src.utils.common import header
 
 ensure_core_dirs()
-
-
-def header(title: str) -> None:
-    bar = "=" * max(64, len(title) + 6)
-    print(f"\n{bar}\n>>> {title}\n{bar}\n")
 
 
 @dataclass

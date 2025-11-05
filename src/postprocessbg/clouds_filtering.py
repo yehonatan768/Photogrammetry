@@ -7,30 +7,22 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
-from tqdm import tqdm
-
-from src.config.base_config import EXPORTS_DIR, ensure_core_dirs
-from src.utils.pcd import compute_signals, load_point_cloud, o3d_module as _o3d
+import open3d
+from src.utils.filters import thresholds_from_quantiles, fallback_if_too_few, maybe_run_sor
+from src.config.base_config import ensure_core_dirs
+from src.utils.pcd import compute_signals, load_point_cloud
 from src.utils.menu import (
-    choose_export_folder,
-    choose_ply_file,
     choose_preset,
+    resolve_export_and_input,
 )
+
 from src.utils.preset_loader import (
     load_preset,
     list_presets,
 )
+from src.utils.common import header, o3d_module, write_ply
 
 ensure_core_dirs()
-
-
-# =========================
-# UI helpers
-# =========================
-def header(title: str) -> None:
-    """Pretty console section header."""
-    bar = "=" * max(64, len(title) + 6)
-    print(f"\n{bar}\n>>> {title}\n{bar}\n")
 
 
 # =========================
@@ -85,9 +77,9 @@ def _rgb_to_hsv(rgb: np.ndarray) -> np.ndarray:
 
 
 def _color_sky_mask(
-    colors_01: np.ndarray,
-    hsv_v_min: float,
-    hsv_s_max: float,
+        colors_01: np.ndarray,
+        hsv_v_min: float,
+        hsv_s_max: float,
 ) -> np.ndarray:
     """
     Heuristic sky detector:
@@ -98,28 +90,13 @@ def _color_sky_mask(
     return (V >= hsv_v_min) & (S <= hsv_s_max)
 
 
-def thresholds_from_quantiles(
-    radius: np.ndarray,
-    s_dens: np.ndarray,
-    composite: np.ndarray,
-    params: FilterParams,
-) -> Tuple[float, float, float]:
-    """
-    Turn quantiles from preset YAML into concrete numeric thresholds.
-    """
-    r_thr = float(np.quantile(radius, params.radius_keep_q))
-    d_thr = float(np.quantile(s_dens, params.density_keep_q))
-    s_thr = float(np.quantile(composite, params.composite_keep_q))
-    return r_thr, d_thr, s_thr
-
-
 def apply_selection(
-    radius: np.ndarray,
-    s_dens: np.ndarray,
-    composite: np.ndarray,
-    r_thr: float,
-    d_thr: float,
-    s_thr: float,
+        radius: np.ndarray,
+        s_dens: np.ndarray,
+        composite: np.ndarray,
+        r_thr: float,
+        d_thr: float,
+        s_thr: float,
 ) -> np.ndarray:
     """
     Boolean mask:
@@ -130,28 +107,9 @@ def apply_selection(
     return (radius <= r_thr) & (s_dens >= d_thr) & (composite >= s_thr)
 
 
-def fallback_if_too_few(
-    mask: np.ndarray,
-    radius: np.ndarray,
-    n0: int,
-) -> np.ndarray:
-    """
-    Safety valve:
-    If we kept almost nothing, relax to "radius only"
-    with a very loose 99.5% quantile cutoff.
-    """
-    keep_count = int(mask.sum())
-    if keep_count >= max(1000, int(0.03 * n0)):
-        return mask
-
-    print("⚠️  Too few kept; fallback to radius-only crop at 99.5% …")
-    r_thr2 = float(np.quantile(radius, 0.995))
-    return (radius <= r_thr2)
-
-
 def maybe_color_sky_removal(
-    pcd: "open3d.geometry.PointCloud",
-    params: FilterParams,
+        pcd: "open3d.geometry.PointCloud",
+        params: FilterParams,
 ) -> "open3d.geometry.PointCloud":
     """
     Optional color-based "sky" cleanup:
@@ -179,44 +137,13 @@ def maybe_color_sky_removal(
     return pcd
 
 
-def maybe_run_sor(
-    pcd: "open3d.geometry.PointCloud",
-    sor_std: Optional[float],
-) -> "open3d.geometry.PointCloud":
-    """
-    Optional Statistical Outlier Removal (SOR).
-    """
-    if sor_std is None or len(pcd.points) == 0:
-        return pcd
-    o3d = _o3d()
-    print("Run SOR …")
-    pcd, _ = pcd.remove_statistical_outlier(
-        nb_neighbors=20,
-        std_ratio=float(sor_std),
-    )
-    return pcd
-
-
-def write_ply(path: Path, pcd: "open3d.geometry.PointCloud") -> Path:
-    """Save point cloud to PLY (binary)."""
-    o3d = _o3d()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    o3d.io.write_point_cloud(
-        str(path),
-        pcd,
-        write_ascii=False,
-        compressed=False,
-    )
-    return path
-
-
 # =========================
 # Public filtering routine
 # =========================
 def filter_clouds(
-    in_ply: Path,
-    out_ply: Path,
-    params: FilterParams,
+        in_ply: Path,
+        out_ply: Path,
+        params: FilterParams,
 ) -> Tuple[Path, int, int]:
     """
     Apply full cloud filtering pipeline and write result to out_ply.
@@ -241,7 +168,10 @@ def filter_clouds(
     radius, s_dens, composite = compute_signals(P)
 
     # 4. thresholds + selection
-    r_thr, d_thr, s_thr = thresholds_from_quantiles(radius, s_dens, composite, params)
+    r_thr, d_thr, s_thr = thresholds_from_quantiles(
+        radius, s_dens, composite,
+        (params.radius_keep_q, params.density_keep_q, params.composite_keep_q))
+
     print(
         f"Thresholds -> "
         f"radius≤{r_thr:.4g}, density≥{d_thr:.4g}, composite≥{s_thr:.4g}"
@@ -271,78 +201,6 @@ def filter_clouds(
     write_ply(out_ply, pcd)
     print(f"✅ Done → {out_ply} ({len(pcd.points):,} pts)")
     return out_ply, n0, len(pcd.points)
-
-
-# =========================
-# Helpers for CLI
-# =========================
-def _auto_pick_latest_export_dir() -> Path:
-    """
-    Fallback for --folder auto.
-    Take newest folder under EXPORTS_DIR.
-    """
-    if not EXPORTS_DIR.exists():
-        raise FileNotFoundError(f"No exports directory at: {EXPORTS_DIR}")
-    cands = [p for p in EXPORTS_DIR.iterdir() if p.is_dir()]
-    if not cands:
-        raise FileNotFoundError(f"No export folders under {EXPORTS_DIR}")
-    cands.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return cands[0]
-
-
-def _auto_pick_input_ply(export_dir: Path) -> Path:
-    """
-    Fallback for --input auto.
-    Priority order:
-      filtered.ply -> light_filtered.ply -> point_cloud.ply -> mesh.ply
-      then newest.
-    """
-    ply_files = [p for p in export_dir.glob("*.ply") if p.is_file()]
-    if not ply_files:
-        raise FileNotFoundError(f"No .ply files in {export_dir}")
-
-    priority = {
-        "filtered.ply": 0,
-        "light_filtered.ply": 1,
-        "point_cloud.ply": 2,
-        "mesh.ply": 99,
-    }
-    ply_files.sort(key=lambda p: (priority.get(p.name, 10), -p.stat().st_mtime))
-    return ply_files[0]
-
-
-def resolve_export_and_input(
-    folder_arg: Optional[str],
-    input_arg: Optional[str],
-) -> Tuple[Path, Path]:
-    """
-    Resolve which export folder and which .ply to use, based on CLI args.
-    """
-    # folder
-    if folder_arg is None:
-        export_dir = choose_export_folder()
-    else:
-        if folder_arg.lower() == "auto":
-            export_dir = _auto_pick_latest_export_dir()
-            print(f"Auto-selected export folder: {export_dir.name}")
-        else:
-            export_dir = EXPORTS_DIR / folder_arg
-            if not export_dir.exists():
-                raise FileNotFoundError(f"Export folder not found: {export_dir}")
-
-    # input
-    if input_arg is None:
-        in_ply = choose_ply_file(export_dir)
-    else:
-        if input_arg.lower() == "auto":
-            in_ply = _auto_pick_input_ply(export_dir)
-            print(f"Auto-selected input: {in_ply.name}")
-        else:
-            in_ply = export_dir / input_arg
-            if not in_ply.exists():
-                raise FileNotFoundError(f"Input .ply not found: {in_ply}")
-
-    return export_dir, in_ply
 
 
 # =========================

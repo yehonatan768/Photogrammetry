@@ -3,10 +3,9 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
-from tqdm import tqdm
 from src.utils.pcd import compute_signals, load_point_cloud
 from src.config.base_config import ensure_core_dirs
 from src.utils.menu import (
@@ -14,19 +13,11 @@ from src.utils.menu import (
     choose_ply_file,
     choose_preset,
 )
+from src.utils.filters import thresholds_from_quantiles, fallback_if_too_few, maybe_run_sor
 from src.utils.preset_loader import load_preset
+from src.utils.common import header, o3d_module
 
 ensure_core_dirs()
-
-
-def header(title: str) -> None:
-    bar = "=" * max(64, len(title) + 6)
-    print(f"\n{bar}\n>>> {title}\n{bar}\n")
-
-
-def _o3d() -> "module":
-    import open3d as o3d  # type: ignore
-    return o3d
 
 
 # =========================
@@ -47,19 +38,6 @@ class PrefilterParams:
     density_keep_q: float
     composite_keep_q: float
     sor_std: Optional[float]
-
-
-def thresholds_from_quantiles(
-    radius: np.ndarray,
-    s_dens: np.ndarray,
-    composite: np.ndarray,
-    params: PrefilterParams,
-) -> Tuple[float, float, float]:
-    """Turn the preset quantiles into concrete numeric thresholds."""
-    r_thr = float(np.quantile(radius, params.radius_keep_q))
-    d_thr = float(np.quantile(s_dens, params.density_keep_q))
-    s_thr = float(np.quantile(composite, params.composite_keep_q))
-    return r_thr, d_thr, s_thr
 
 
 def diagnostic_counts(mask: np.ndarray, total: int, label: str) -> None:
@@ -90,51 +68,6 @@ def apply_joint_selection(
     return mask_r & mask_d & mask_s
 
 
-def fallback_if_too_few(
-    keep_mask: np.ndarray,
-    radius: np.ndarray,
-) -> np.ndarray:
-    """
-    If we kept too few (< max(1000, 3%) ), relax aggressively:
-    keep everything within the 99.5% radius.
-    """
-    n = len(radius)
-    keep_count = int(keep_mask.sum())
-    if keep_count >= max(1000, int(0.03 * n)):
-        return keep_mask
-
-    print("⚠️  Kept too few points; relaxing to radius-only crop at 99.5% …")
-    r_thr2 = float(np.quantile(radius, 0.995))
-    relax_mask = (radius <= r_thr2)
-
-    keep_count = int(relax_mask.sum())
-    keep_ratio = keep_count / max(1, n)
-    print(f"Radius-only keep: {keep_count:,} points ({keep_ratio:.1%})")
-
-    if keep_count == 0:
-        print("⚠️  Still empty after fallback. Copying input as filtered output.")
-    return relax_mask
-
-
-def maybe_run_sor(
-    pcd: "open3d.geometry.PointCloud",
-    sor_std: Optional[float],
-) -> "open3d.geometry.PointCloud":
-    """
-    Optionally run Statistical Outlier Removal (SOR) if the preset
-    gives us a std_ratio.
-    """
-    if sor_std is None or len(pcd.points) == 0:
-        return pcd
-    o3d = _o3d()
-    print("Run light SOR …")
-    pcd, _ = pcd.remove_statistical_outlier(
-        nb_neighbors=20,
-        std_ratio=float(sor_std),
-    )
-    return pcd
-
-
 def prefilter_keep_core(
     in_ply: Path,
     out_ply: Path,
@@ -144,7 +77,7 @@ def prefilter_keep_core(
     Filter the point cloud `in_ply` using selection logic derived from params,
     then save it to `out_ply`.
     """
-    o3d = _o3d()
+    o3d = o3d_module()
 
     header("Prefilter")
 
@@ -157,7 +90,9 @@ def prefilter_keep_core(
     radius, s_dens, composite = compute_signals(P)
 
     # 2. thresholds
-    r_thr, d_thr, s_thr = thresholds_from_quantiles(radius, s_dens, composite, params)
+    r_thr, d_thr, s_thr = thresholds_from_quantiles(
+        radius, s_dens, composite,
+        (params.radius_keep_q, params.density_keep_q, params.composite_keep_q))
     print(
         f"Thresholds -> "
         f"radius≤{r_thr:.4g}, density≥{d_thr:.4g}, composite≥{s_thr:.4g}"
